@@ -163,12 +163,15 @@ func (s *statsServer) GetUsersStats(ctx context.Context, request *GetUsersStatsR
 
 func (s *statsServer) QueryStats(ctx context.Context, request *QueryStatsRequest) (*QueryStatsResponse, error) {
 	response := &QueryStatsResponse{}
+	var toUnregister []string
 
 	s.stats.VisitCounters(func(name string, c feature_stats.Counter) bool {
 		if strings.Contains(name, request.Pattern) {
 			var value int64
-			if request.Reset_ {
+			// Reset only applies to user counters, which are also unregistered afterwards.
+			if request.Reset_ && strings.HasPrefix(name, "user") {
 				value = c.Set(0)
+				toUnregister = append(toUnregister, name)
 			} else {
 				value = c.Value()
 			}
@@ -179,6 +182,13 @@ func (s *statsServer) QueryStats(ctx context.Context, request *QueryStatsRequest
 		}
 		return true
 	})
+
+	// UnregisterCounter must not be called inside VisitCounters (it would deadlock).
+	for _, name := range toUnregister {
+		if err := s.stats.UnregisterCounter(name); err != nil {
+			return nil, status.Error(codes.Internal, "QueryStats UnregisterCounter error: "+err.Error())
+		}
+	}
 
 	return response, nil
 }
